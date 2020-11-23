@@ -9,7 +9,7 @@ import (
 	"99Movies/models"
 )
 
-func TestJSONReader_JSONToMovies(t *testing.T) {
+func TestJSONReader_GetMovies(t *testing.T) {
 	tests := []struct {
 		name    string
 		setup   func() *json.Decoder
@@ -55,7 +55,7 @@ func TestJSONReader_JSONToMovies(t *testing.T) {
 			Parser: decoder,
 			File:   nil,
 		}
-		items, err := reader.JSONToMovies()
+		items, err := reader.GetMovies()
 		if err != nil && tt.wantErr == false {
 			t.Errorf("unexpected error %s", err)
 			return
@@ -69,39 +69,40 @@ func TestJSONReader_JSONToMovies(t *testing.T) {
 			return
 		}
 		if !reflect.DeepEqual(tt.output(), items) {
-			t.Errorf("JSONToMovies(%v)=%v, wanted %v", tt.output(), items, tt.output())
+			t.Errorf("GetMovies(%v)=%v, wanted %v", tt.output(), items, tt.output())
 		}
 	}
 }
 
-func TestJSONReader_JSONToReviews(t *testing.T) {
+func TestJSONReader_GetReviews(t *testing.T) {
 	tests := []struct {
-		name    string
-		setup   func() *json.Decoder
-		output  []models.Reviews
-		wantErr bool
+		name        string
+		setup       func() *json.Decoder
+		checkReview func(chan models.Reviews)
+		checkError  func(chan error)
+		wantErr     bool
 	}{
 		{
 			name: "successfully parse",
 			setup: func() *json.Decoder {
 				input := []byte(`[
-									{"title":"Star Wars","review":"Great, this film was","score":77},
-                                    {"title":"Star Wars The Force Awakens","review":"A long time ago","score":50}
+									{"title":"Star Wars","review":"Great, this film was","score":77}
 								 ]`)
 				decoder := json.NewDecoder(bytes.NewReader(input))
 				return decoder
 			},
-			output: []models.Reviews{
-				{
-					Title:  "Star Wars",
-					Review: "Great, this film was",
-					Score:  77,
-				},
-				{
-					Title:  "Star Wars The Force Awakens",
-					Review: "A long time ago",
-					Score:  50,
-				},
+			checkReview: func(out chan models.Reviews) {
+				for review := range out {
+					expectedReview := models.Reviews{
+						Title:  "Star Wars",
+						Review: "Great, this film was",
+						Score:  77,
+					}
+					if !reflect.DeepEqual(expectedReview, review) {
+						t.Errorf("GetReview()=%v, wanted %v", review, expectedReview)
+
+					}
+				}
 			},
 			wantErr: false,
 		},
@@ -115,7 +116,15 @@ func TestJSONReader_JSONToReviews(t *testing.T) {
 				decoder := json.NewDecoder(bytes.NewReader(input))
 				return decoder
 			},
-			output:  nil,
+			checkError: func(errors chan error) {
+				for err := range errors {
+					expectedErrorString := "could not decode reviews invalid character '}' after object key"
+					if !reflect.DeepEqual(err.Error(), expectedErrorString) {
+						t.Errorf("GetReview()=%v, wanted %v", err, expectedErrorString)
+					}
+					return
+				}
+			},
 			wantErr: true,
 		},
 	}
@@ -126,21 +135,13 @@ func TestJSONReader_JSONToReviews(t *testing.T) {
 			Parser: decoder,
 			File:   nil,
 		}
-		items, err := reader.JSONToReviews()
-		if err != nil && tt.wantErr == false {
-			t.Errorf("unexpected error %s", err)
-			return
-		}
-		if tt.wantErr == true && err == nil {
-			t.Errorf("wanted an error during %s", tt.name)
-			return
-		}
-		if tt.wantErr == true && err != nil {
-			// :)
-			return
-		}
-		if !reflect.DeepEqual(tt.output, items) {
-			t.Errorf("JSONToMovies(%v)=%v, wanted %v", tt.output, items, tt.output)
+		out := make(chan models.Reviews)
+		errors := make(chan error)
+		go reader.GetReviews(out, errors)
+		if tt.wantErr {
+			tt.checkError(errors)
+		} else {
+			tt.checkReview(out)
 		}
 	}
 }

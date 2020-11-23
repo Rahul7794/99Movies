@@ -1,4 +1,4 @@
-package tweetprocessor
+package handler
 
 import (
 	"reflect"
@@ -9,86 +9,108 @@ import (
 
 func TestInputs_CreateTweets(t *testing.T) {
 	tests := []struct {
-		name      string
-		setup     func() *Inputs
-		tweets    []string
-		wantError bool
+		name       string
+		setup      func(chan models.Reviews)
+		checkTweet func(chan string)
+		MovieMap   func() map[string]int
+		checkError  func(chan error)
+		wantError  bool
 	}{
 		{
 			name: "successfully create tweets",
-			setup: func() *Inputs {
+			setup: func(out chan models.Reviews) {
+				reviews := models.Reviews{
+					Title:  "Star Wars",
+					Review: "Great, this film was",
+					Score:  77,
+				}
+				out <- reviews
+			},
+			MovieMap : func() map[string]int {
 				m := make(map[string]int)
 				m["Star Wars"] = 1977
 				m["Star Wars The Force Awakens"] = 2015
-				reviews := []models.Reviews{
-					{
-						Title:  "Star Wars",
-						Review: "Great, this film was",
-						Score:  77,
-					},
-					{
-						Title:  "Star Wars The Force Awakens",
-						Review: "A long time ago in a galaxy far far away someone made the best sci-fi film of all time. Then some chap came along and basically made the same movie again",
-						Score:  50,
-					},
-				}
-				return &Inputs{
-					Movies:  m,
-					Reviews: reviews,
-				}
+				return m
 			},
-			tweets: []string{
-				"Star Wars (1977): Great, this film was ****",
-				"Star Wars The Force Awake (2015): A long time ago in a galaxy far far away someone made the best sci-fi film of all time. Then some cha **½",
+			checkTweet: func(tweets chan string) {
+				for tweet := range tweets {
+					expectedTweet := "Star Wars (1977): Great, this film was ****"
+					if !reflect.DeepEqual(expectedTweet, tweet) {
+						t.Errorf("CreateTweet()=%v, wanted %v", tweet, expectedTweet)
+					}
+					return
+				}
 			},
 			wantError: false,
 		},
 		{
 			name: "successfully create tweets with year not found",
-			setup: func() *Inputs {
-				m := make(map[string]int)
-				m["Star Wars The Force Awakens"] = 2015
-				reviews := []models.Reviews{
-					{
-						Title:  "Star Wars",
-						Review: "Great, this film was",
-						Score:  77,
-					},
-					{
-						Title:  "Star Wars The Force Awakens",
-						Review: "A long time ago in a galaxy far far away someone made the best sci-fi film of all time. Then some chap came along and basically made the same movie again",
-						Score:  50,
-					},
+			setup: func(out chan models.Reviews) {
+				reviews := models.Reviews{
+					Title:  "Star Wars",
+					Review: "Great, this film was",
+					Score:  77,
 				}
-				return &Inputs{
-					Movies:  m,
-					Reviews: reviews,
-				}
+				out <- reviews
 			},
-			tweets: []string{
-				"Star Wars: Great, this film was ****",
-				"Star Wars The Force Awake (2015): A long time ago in a galaxy far far away someone made the best sci-fi film of all time. Then some cha **½",
+			MovieMap : func() map[string]int {
+				m := make(map[string]int)
+				return m
+			},
+			checkTweet: func(tweets chan string) {
+				for tweet := range tweets {
+					expectedTweet := "Star Wars: Great, this film was ****"
+					if !reflect.DeepEqual(expectedTweet, tweet) {
+						t.Errorf("CreateTweet()=%v, wanted %v", tweet, expectedTweet)
+					}
+					return
+				}
 			},
 			wantError: false,
 		},
+		{
+			name: "cannot create tweets because of score > 100",
+			setup: func(out chan models.Reviews) {
+				reviews := models.Reviews{
+					Title:  "Star Wars",
+					Review: "Great, this film was",
+					Score:  101,
+				}
+				out <- reviews
+			},
+			MovieMap : func() map[string]int {
+				return make(map[string]int)
+			},
+			checkError: func(errors chan error) {
+				for err := range errors {
+					expectedErrorString := "cannot get rating from scores the score should be in range 1-100 (inclusive)"
+					if !reflect.DeepEqual(err.Error(), expectedErrorString) {
+						t.Errorf("CreateTweet()=%v, wanted %v", err, expectedErrorString)
+					}
+					return
+				}
+			},
+			wantError: true,
+		},
 	}
 	for _, tt := range tests {
-		input := tt.setup()
-		tweets, err := input.CreateTweets()
-		if err != nil && tt.wantError == false {
-			t.Errorf("unexpected error %s", err)
-			return
+
+		reviewChan := make(chan models.Reviews)
+		tweetChan := make(chan string)
+		errorChan := make(chan error)
+		input := Inputs{
+			MoviesMap: tt.MovieMap(),
+			TweetChan: tweetChan,
+			ErrorChan: errorChan,
+			DoneChan:  nil,
+			Writer:    nil,
 		}
-		if tt.wantError == true && err == nil {
-			t.Errorf("wanted an error during %s", tt.name)
-			return
-		}
-		if tt.wantError == true && err != nil {
-			// :)
-			return
-		}
-		if !reflect.DeepEqual(tt.tweets, tweets) {
-			t.Errorf("CreateTweets=%v, wanted %v", tweets, tt.tweets)
+		go tt.setup(reviewChan)
+		go input.CreateTweets(reviewChan)
+		if tt.wantError {
+			tt.checkError(errorChan)
+		} else {
+			tt.checkTweet(tweetChan)
 		}
 	}
 }
