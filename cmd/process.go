@@ -1,13 +1,12 @@
 package cmd
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 
+	"99Movies/handler"
 	"99Movies/io"
 	"99Movies/log"
-	"99Movies/tweetprocessor"
+	"99Movies/models"
 	"99Movies/version"
 )
 
@@ -39,43 +38,58 @@ func processCmd(_ *cobra.Command, _ []string) error {
 	log.Infof("starting the tweet processor with version: %s %s \n on %s => %s", version.Version, version.BuildDate,
 		version.OsArch, version.GoVersion)
 
+	// Initialize all the channels used in application.
+	reviewsChan := make(chan models.Reviews)
+	errorChan := make(chan error)
+	tweetChan := make(chan string)
+	doneChan := make(chan bool, 1)
+
 	// Create a Movies reader object.
-	readerMovies := io.NewReader("fileType", moviesPath)
-	defer readerMovies.Close()
+	movies := io.NewReader("file", moviesPath)
+	defer movies.Close()
 	// Create a Reviews reader object.
-	readerReviews := io.NewReader("fileType", reviewsPath)
+	readerReviews := io.NewReader("file", reviewsPath)
 	defer readerReviews.Close()
 
-	// read movies
-	movies, err := readerMovies.JSONToMovies()
+	// Create a tweet writer object
+	writerTweets := io.NewWriter("console", nil)
+
+	// create Map of movies and date
+	moviesMap, err := movies.GetMovies()
 	if err != nil {
 		return err
 	}
 	// read reviews
-	reviews, err := readerReviews.JSONToReviews()
-	if err != nil {
-		return err
-	}
+	go readerReviews.GetReviews(reviewsChan, errorChan)
 
 	// create input for processor
-	input := tweetprocessor.Inputs{
-		Movies:  movies,
-		Reviews: reviews,
+	input := handler.Inputs{
+		MoviesMap: moviesMap,
+		TweetChan: tweetChan,
+		ErrorChan: errorChan,
+		DoneChan:  doneChan,
+		Writer:    writerTweets,
 	}
 
 	// create a processor object
-	tweetsProcessor := tweetprocessor.New(input)
+	tweetsProcessor := handler.New(input)
 
 	// compose tweets
-	tweets, err := tweetsProcessor.CreateTweets()
-	if err != nil {
-		return err
-	}
+	go tweetsProcessor.CreateTweets(reviewsChan)
 
-	// print tweets to console
-	// todo: need to be properly implemented to send tweets to specific output destination.
-	for _, tweets := range tweets {
-		fmt.Println(tweets)
+	// save tweets
+	go tweetsProcessor.SaveTweets()
+
+	// Listen to error and done channel
+	// If error channel receive error, return it
+	// if done channel receive signal, end the program
+	for {
+		select {
+		case err := <-errorChan: // Listen errorChannel
+			return err
+		case <-doneChan: // Listen done Channel
+			log.Info("complete !!!")
+			return nil
+		}
 	}
-	return nil
 }

@@ -1,4 +1,4 @@
-package tweetprocessor
+package handler
 
 import (
 	"fmt"
@@ -11,30 +11,36 @@ const (
 	maxTitleLength = 25
 )
 
-// CreateTweets creates array of tweets from movies and reviews json
-func (input *Inputs) CreateTweets() ([]string, error) {
-	var tweets []string
-	for i := 0; i < len(input.Reviews); i++ {
+// CreateTweets create tweets from movies and reviews by user
+func (i *Inputs) CreateTweets(in chan models.Reviews) {
+	for review := range in {
 		// Get rating based on scores
-		ratings, err := createRatings(input.Reviews[i].Score)
+		ratings, err := createRatings(review.Score)
 		if err != nil {
-			return nil, fmt.Errorf("cannot get rating from scores %v", err)
+			i.ErrorChan <- fmt.Errorf("cannot get rating from scores %v", err)
 		}
 		tweet := models.Tweet{
-			Title:  input.Reviews[i].Title,
-			Year:   input.getYear(input.Reviews[i].Title),
-			Review: input.Reviews[i].Review,
+			Title:  review.Title,
+			Year:   i.getYear(review.Title),
+			Review: review.Review,
 			Rating: ratings,
 		}
-		tweets = append(tweets, tweetsToString(tweet))
+		i.TweetChan <- tweetsToString(tweet)
 	}
-	return tweets, nil
+	close(i.TweetChan)
+}
+
+// SaveTweets write tweets to different output source
+func (i *Inputs) SaveTweets() {
+	for t := range i.TweetChan {
+		i.Writer.WriteTweets(t)
+	}
+	i.DoneChan <- true
 }
 
 // getYear get year models.Movies struct and delete entry from map.
-func (input *Inputs) getYear(movies string) int {
-	if year, found := input.Movies[movies]; found {
-		delete(input.Movies, movies)
+func (i *Inputs) getYear(movies string) int {
+	if year, found := i.MoviesMap[movies]; found {
 		return year
 	}
 	return 0
